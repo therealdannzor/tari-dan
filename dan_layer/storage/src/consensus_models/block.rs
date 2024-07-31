@@ -13,16 +13,9 @@ use log::*;
 use serde::{Deserialize, Serialize};
 use tari_common::configuration::Network;
 use tari_common_types::types::{FixedHash, FixedHashSizeError, PublicKey};
-use tari_crypto::tari_utilities::epoch_time::EpochTime;
+use tari_crypto::{ristretto::RistrettoPublicKey, tari_utilities::epoch_time::EpochTime};
 use tari_dan_common_types::{
-    hashing,
-    optional::Optional,
-    serde_with,
-    shard::Shard,
-    Epoch,
-    NodeAddressable,
-    NodeHeight,
-    SubstateAddress,
+    hashing, optional::Optional, serde_with, shard::Shard, Epoch, NodeAddressable, NodeHeight, SubstateAddress,
 };
 use tari_engine_types::substate::SubstateDiff;
 use tari_transaction::TransactionId;
@@ -31,32 +24,15 @@ use time::PrimitiveDateTime;
 use ts_rs::TS;
 
 use super::{
-    BlockDiff,
-    ForeignProposal,
-    ForeignSendCounters,
-    QuorumCertificate,
-    SubstateChange,
-    SubstateDestroyedProof,
-    SubstateRecord,
-    ValidatorSchnorrSignature,
+    BlockDiff, ForeignProposal, ForeignSendCounters, QuorumCertificate, SubstateChange, SubstateDestroyedProof,
+    SubstateRecord, ValidatorSchnorrSignature,
 };
 use crate::{
     consensus_models::{
-        Command,
-        HighQc,
-        LastExecuted,
-        LastProposed,
-        LastVoted,
-        LeafBlock,
-        LockedBlock,
-        SubstateCreatedProof,
-        SubstateUpdate,
-        TransactionRecord,
-        Vote,
+        Command, HighQc, LastExecuted, LastProposed, LastVoted, LeafBlock, LockedBlock, SubstateCreatedProof,
+        SubstateUpdate, TransactionRecord, Vote,
     },
-    StateStoreReadTransaction,
-    StateStoreWriteTransaction,
-    StorageError,
+    StateStoreReadTransaction, StateStoreWriteTransaction, StorageError,
 };
 
 const LOG_TARGET: &str = "tari::dan::storage::consensus_models::block";
@@ -107,6 +83,8 @@ pub struct Block {
     base_layer_block_height: u64,
     #[cfg_attr(feature = "ts", ts(type = "string"))]
     base_layer_block_hash: FixedHash,
+    #[cfg_attr(feature = "ts", ts(type = "string"))]
+    sidechain_id: Option<RistrettoPublicKey>,
 }
 
 impl Block {
@@ -127,6 +105,7 @@ impl Block {
         timestamp: u64,
         base_layer_block_height: u64,
         base_layer_block_hash: FixedHash,
+        sidechain_id: Option<RistrettoPublicKey>,
     ) -> Self {
         let mut block = Self {
             id: BlockId::zero(),
@@ -150,6 +129,7 @@ impl Block {
             timestamp,
             base_layer_block_height,
             base_layer_block_hash,
+            sidechain_id,
         };
         block.id = block.calculate_hash().into();
         block
@@ -178,6 +158,7 @@ impl Block {
         timestamp: u64,
         base_layer_block_height: u64,
         base_layer_block_hash: FixedHash,
+        sidechain_id: Option<RistrettoPublicKey>,
     ) -> Self {
         Self {
             id,
@@ -201,10 +182,11 @@ impl Block {
             timestamp,
             base_layer_block_height,
             base_layer_block_hash,
+            sidechain_id,
         }
     }
 
-    pub fn genesis(network: Network, epoch: Epoch, shard: Shard) -> Self {
+    pub fn genesis(network: Network, epoch: Epoch, shard: Shard, sidechain_id: Option<RistrettoPublicKey>) -> Self {
         Self::new(
             network,
             BlockId::zero(),
@@ -222,6 +204,7 @@ impl Block {
             0,
             0,
             FixedHash::zero(),
+            sidechain_id,
         )
     }
 
@@ -249,6 +232,7 @@ impl Block {
             timestamp: EpochTime::now().as_u64(),
             base_layer_block_height: 0,
             base_layer_block_hash: FixedHash::zero(),
+            sidechain_id: None,
         }
     }
 
@@ -287,6 +271,7 @@ impl Block {
             timestamp: parent_timestamp,
             base_layer_block_height: parent_base_layer_block_height,
             base_layer_block_hash: parent_base_layer_block_hash,
+            sidechain_id: None,
         };
         block.id = block.calculate_hash().into();
         block.is_processed = false;

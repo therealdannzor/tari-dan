@@ -38,7 +38,7 @@ use tari_common::{
 #[cfg(not(feature = "metrics"))]
 use tari_consensus::traits::hooks::NoopHooks;
 use tari_core::transactions::transaction_components::ValidatorNodeSignature;
-use tari_crypto::tari_utilities::ByteArray;
+use tari_crypto::{ristretto::RistrettoPublicKey, tari_utilities::ByteArray};
 use tari_dan_app_utilities::{
     base_layer_scanner,
     consensus_constants::ConsensusConstants,
@@ -55,10 +55,7 @@ use tari_dan_p2p::TariMessagingSpec;
 use tari_dan_storage::{
     consensus_models::{Block, BlockId, SubstateRecord},
     global::GlobalDb,
-    StateStore,
-    StateStoreReadTransaction,
-    StateStoreWriteTransaction,
-    StorageError,
+    StateStore, StateStoreReadTransaction, StateStoreWriteTransaction, StorageError,
 };
 use tari_dan_storage_sqlite::global::SqliteGlobalDbAdapter;
 use tari_engine_types::{
@@ -77,9 +74,7 @@ use tari_state_store_sqlite::SqliteStateStore;
 use tari_template_lib::{
     auth::ResourceAccessRules,
     constants::{
-        CONFIDENTIAL_TARI_RESOURCE_ADDRESS,
-        PUBLIC_IDENTITY_RESOURCE_ADDRESS,
-        XTR_FAUCET_COMPONENT_ADDRESS,
+        CONFIDENTIAL_TARI_RESOURCE_ADDRESS, PUBLIC_IDENTITY_RESOURCE_ADDRESS, XTR_FAUCET_COMPONENT_ADDRESS,
         XTR_FAUCET_VAULT_ADDRESS,
     },
     models::{Amount, EntityId, Metadata},
@@ -107,8 +102,7 @@ use crate::{
     validator::Validator,
     validator_registration_file::ValidatorRegistrationFile,
     virtual_substate::VirtualSubstateManager,
-    ApplicationConfig,
-    ValidatorNodeConfig,
+    ApplicationConfig, ValidatorNodeConfig,
 };
 
 const LOG_TARGET: &str = "tari::validator_node::bootstrap";
@@ -184,7 +178,13 @@ pub async fn spawn_services(
     // Connect to shard db
     let state_store =
         SqliteStateStore::connect(&format!("sqlite://{}", config.validator_node.state_db_path().display()))?;
-    state_store.with_write_tx(|tx| bootstrap_state(tx, config.network))?;
+    state_store.with_write_tx(|tx| {
+        bootstrap_state(
+            tx,
+            config.network,
+            config.validator_node.validator_node_sidechain_id.clone(),
+        )
+    })?;
 
     info!(target: LOG_TARGET, "Epoch manager initializing");
     // Epoch manager
@@ -441,7 +441,11 @@ async fn spawn_p2p_rpc(
     Ok(())
 }
 
-fn bootstrap_state<TTx>(tx: &mut TTx, network: Network) -> Result<(), StorageError>
+fn bootstrap_state<TTx>(
+    tx: &mut TTx,
+    network: Network,
+    sidechain_id: Option<RistrettoPublicKey>,
+) -> Result<(), StorageError>
 where
     TTx: StateStoreWriteTransaction + Deref,
     TTx::Target: StateStoreReadTransaction,
@@ -464,7 +468,13 @@ where
         None,
         None,
     );
-    create_substate(tx, network, PUBLIC_IDENTITY_RESOURCE_ADDRESS, value)?;
+    create_substate(
+        tx,
+        network,
+        PUBLIC_IDENTITY_RESOURCE_ADDRESS,
+        value,
+        sidechain_id.clone(),
+    )?;
 
     let mut xtr_resource = Resource::new(
         ResourceType::Confidential,
@@ -489,7 +499,7 @@ where
                 state: cbor!({"vault" => XTR_FAUCET_VAULT_ADDRESS}).unwrap(),
             },
         };
-        create_substate(tx, network, XTR_FAUCET_COMPONENT_ADDRESS, value)?;
+        create_substate(tx, network, XTR_FAUCET_COMPONENT_ADDRESS, value, sidechain_id.clone())?;
 
         xtr_resource.increase_total_supply(Amount::MAX);
         let value = Vault::new(ResourceContainer::Confidential {
@@ -500,10 +510,16 @@ where
             locked_revealed_amount: Default::default(),
         });
 
-        create_substate(tx, network, XTR_FAUCET_VAULT_ADDRESS, value)?;
+        create_substate(tx, network, XTR_FAUCET_VAULT_ADDRESS, value, sidechain_id.clone())?;
     }
 
-    create_substate(tx, network, CONFIDENTIAL_TARI_RESOURCE_ADDRESS, xtr_resource)?;
+    create_substate(
+        tx,
+        network,
+        CONFIDENTIAL_TARI_RESOURCE_ADDRESS,
+        xtr_resource,
+        sidechain_id,
+    )?;
 
     Ok(())
 }
@@ -513,6 +529,7 @@ fn create_substate<TTx, TId, TVal>(
     network: Network,
     substate_id: TId,
     value: TVal,
+    sidechain_id: Option<RistrettoPublicKey>,
 ) -> Result<(), StorageError>
 where
     TTx: StateStoreWriteTransaction + Deref,
@@ -521,7 +538,7 @@ where
     TId: Into<SubstateId>,
     TVal: Into<SubstateValue>,
 {
-    let genesis_block = Block::genesis(network, Epoch(0), Shard::zero());
+    let genesis_block = Block::genesis(network, Epoch(0), Shard::zero(), sidechain_id);
     let substate_id = substate_id.into();
     let id = VersionedSubstateId::new(substate_id, 0);
     SubstateRecord {
